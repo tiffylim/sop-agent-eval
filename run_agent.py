@@ -169,3 +169,17 @@ if __name__ == "__main__":
         "flag_reason": "duplicate reference number",
     }
     run_agent(test_transaction_reject)
+
+    print("\n\n### Case 3: Missing information, received in time (expect: release) ###")
+    test_transaction_missing_ok = {
+        "transaction_id": "TXN-201",
+        "flag_reason": "missing required information",
+    }
+    run_agent(test_transaction_missing_ok)
+
+    print("\n\n### Case 4: Missing information, received too late (expect: reject, confirmation required) ###")
+    test_transaction_missing_late = {
+        "transaction_id": "TXN-202",
+        "flag_reason": "missing required information",
+    }
+    run_agent(test_transaction_missing_late)    
