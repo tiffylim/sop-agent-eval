@@ -83,13 +83,24 @@ explaining your reasoning, call log_decision with your final decision and a rati
 """
 
 
-def run_agent(transaction: dict):
+def run_agent(transaction: dict, auto_approve_for_eval: bool = False):
+    """Runs the agent on one transaction. Returns (final_decision, final_rationale).
+
+    auto_approve_for_eval: when True, skips the human sign-off prompt on
+    reject decisions and proceeds automatically, printing a clearly labeled
+    notice. Intended ONLY for the automated eval suite (run_eval.py), never
+    for real interactive use — in real use this stays False so a human
+    genuinely has to approve every reject.
+    """
     messages = [
         {
             "role": "user",
             "content": f"A transaction has been flagged for review. Details: {json.dumps(transaction)}. Please review it per the SOP.",
         }
     ]
+
+    final_decision = None
+    final_rationale = None
 
     while True:
         response = client.messages.create(
@@ -113,9 +124,10 @@ def run_agent(transaction: dict):
         for block in response.content:
             if block.type == "tool_use":
 
-                # --- Human confirmation gate ---
-                # Only reject-and-return-funds decisions need a second
-                # analyst's sign-off, per SOP step 6. Release does not.
+                if block.name == "log_decision":
+                    final_decision = block.input.get("decision")
+                    final_rationale = block.input.get("rationale")
+
                 if block.name == "log_decision" and block.input.get("decision") == "reject":
                     print(f"\n{'='*60}")
                     print("SECOND ANALYST SIGN-OFF REQUIRED")
@@ -123,24 +135,24 @@ def run_agent(transaction: dict):
                     print("Proposed decision: REJECT (return funds)")
                     print(f"Rationale: {block.input.get('rationale')}")
                     print(f"{'='*60}")
-                    approval = input("Approve this reject? (y/n): ").strip().lower()
 
-                    if approval != "y":
-                        # Option A: human override is final. No round-trip
-                        # back to Claude — log it directly and end review.
-                        override_reason = input(
-                            "Reject declined. Enter the reason for overriding to release "
-                            "(this is the final decision — it will be logged as-is): "
-                        ).strip()
-                        log_decision(
-                            transaction_id=block.input.get("transaction_id"),
-                            decision="release (override)",
-                            rationale=f"Second analyst declined the reject and overrode to release. Reason: {override_reason}",
-                        )
-                        print("\nOverride logged. This is the final decision for this case — ending review.\n")
-                        return
-                    print("Approved. Proceeding.\n")
-                # --- end confirmation gate ---
+                    if auto_approve_for_eval:
+                        print("[EVAL MODE] Auto-approving — no human reviewer during automated evaluation.\n")
+                    else:
+                        approval = input("Approve this reject? (y/n): ").strip().lower()
+                        if approval != "y":
+                            override_reason = input(
+                                "Reject declined. Enter the reason for overriding to release "
+                                "(this is the final decision — it will be logged as-is): "
+                            ).strip()
+                            log_decision(
+                                transaction_id=block.input.get("transaction_id"),
+                                decision="release (override)",
+                                rationale=f"Second analyst declined the reject and overrode to release. Reason: {override_reason}",
+                            )
+                            print("\nOverride logged. This is the final decision for this case — ending review.\n")
+                            return "release (override)", override_reason
+                        print("Approved. Proceeding.\n")
 
                 func = TOOL_FUNCTIONS[block.name]
                 result = func(**block.input)
@@ -151,35 +163,33 @@ def run_agent(transaction: dict):
 
         messages.append({"role": "user", "content": tool_results})
 
+    return final_decision, final_rationale
+
 
 if __name__ == "__main__":
     print("\n### Case 1: Amount exceeds limit (expect: release, no confirmation needed) ###")
-    test_transaction_release = {
+    run_agent({
         "transaction_id": "TXN-501",
         "customer_id": "CUST-A",
         "amount": 10000,
         "flag_reason": "amount exceeds limit",
-    }
-    run_agent(test_transaction_release)
+    })
 
     print("\n\n### Case 2: Duplicate reference number (expect: reject, confirmation required) ###")
-    test_transaction_reject = {
+    run_agent({
         "transaction_id": "TXN-502",
         "reference_number": "REF1001",
         "flag_reason": "duplicate reference number",
-    }
-    run_agent(test_transaction_reject)
+    })
 
     print("\n\n### Case 3: Missing information, received in time (expect: release) ###")
-    test_transaction_missing_ok = {
+    run_agent({
         "transaction_id": "TXN-201",
         "flag_reason": "missing required information",
-    }
-    run_agent(test_transaction_missing_ok)
+    })
 
     print("\n\n### Case 4: Missing information, received too late (expect: reject, confirmation required) ###")
-    test_transaction_missing_late = {
+    run_agent({
         "transaction_id": "TXN-202",
         "flag_reason": "missing required information",
-    }
-    run_agent(test_transaction_missing_late)    
+    })
